@@ -1,507 +1,415 @@
-
-
-## R Markdown
-
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-## R Markdown
-```{r}
-file.choose()
-```
-##base code
-```{r}
-shinny_df  <- read.csv("C:/Users/jhkristo/OneDrive - Syracuse University/IST421/Shinny app/national_actual_1.csv", stringsAsFactors = FALSE)
-```
-```{r}
-library(readr)
-shiny_df <- read_csv("national_actual_1.csv")
-```
-
-
-```{r}
-library(dplyr)
-create_unknown_column <- function(df) {
-  df %>%
-    mutate(
-      # Clean A:E first so numeric values are preserved
-      across(A:E, ~ {
-        x <- trimws(as.character(.))
-        x[x %in% c("", "N/A", "NA", "null", "NULL")] <- NA
-        x <- gsub(",", "", x)
-        as.numeric(x)
-      }),
-      
-      # Clean Production too, in case it is stored as text
-      Production = {
-        x <- trimws(as.character(Production))
-        x[x %in% c("", "N/A", "NA", "null", "NULL")] <- NA
-        x <- gsub(",", "", x)
-        as.numeric(x)
-      },
-      
-      # Count how many of A:E are missing
-      missing_count = rowSums(is.na(across(A:E))),
-      
-      # Sum only known values from A:E
-      known_total = rowSums(across(A:E), na.rm = TRUE),
-      
-      # If all five values are present, F = 0
-      # Otherwise, F = Production - known total
-      F = ifelse(
-        missing_count == 0,
-        0,
-        Production - known_total
-      ),
-      
-      # Prevent negative values in F
-      F = ifelse(is.na(F) | F < 0, 0, F)
-    ) %>%
-    select(-missing_count, -known_total)
-}
-
-# Create pilot_df first
-pilot_df <- shiny_df %>%
-  select(Month, Year, Date, Industry_members, Production, A, B, C, D, E)
-
-# Apply function
-pilot_df <- create_unknown_column(pilot_df)
-```
-
-
-```{r}
-library(shiny)
-library(dplyr)
-library(tidyr)
-library(ggplot2)
-library(scales)
+import pandas as pd
+import numpy as np
+import streamlit as st
+import plotly.express as px
+import plotly.graph_objects as go
 
 # ---------------------------------
-# Build clean dataframe
+# Page config
 # ---------------------------------
-app_df <- pilot_df %>%
-  rename(
-    `Still Wine ≤ 16% ABV` = A,
-    `Still Wine > 16% ABV` = B,
-    `Sparkling Wine` = C,
-    `Artificially Carbonated Wine` = D,
-    `Hard Cider` = E,
-    `Unknown` = F
-  )
-
-month_levels <- c(
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December"
-)
-
-app_df$Month <- factor(app_df$Month, levels = month_levels, ordered = TRUE)
-app_df$Year  <- as.numeric(app_df$Year)
-
-production_cols <- c(
-  "Still Wine ≤ 16% ABV",
-  "Still Wine > 16% ABV",
-  "Sparkling Wine",
-  "Artificially Carbonated Wine",
-  "Hard Cider",
-  "Unknown"
+st.set_page_config(
+    page_title="Wine Production Dashboard",
+    layout="wide"
 )
 
 # ---------------------------------
-# UI
+# Custom styling
 # ---------------------------------
-ui <- fluidPage(
-  
-  tags$head(
-    tags$style(HTML("
-      body {
+st.markdown("""
+<style>
+    .main {
         background-color: #f8f3f4;
-        font-family: Arial, sans-serif;
-        color: #3b1f24;
-      }
-
-      .title-panel {
+    }
+    .block-container {
+        padding-top: 1.5rem;
+        padding-bottom: 2rem;
+    }
+    .title-box {
         background: linear-gradient(90deg, #5c0f1b, #8b1e2d);
-        color: white;
-        padding: 22px;
+        padding: 1.2rem 1.4rem;
         border-radius: 14px;
-        margin-bottom: 20px;
+        color: white;
         box-shadow: 0 4px 14px rgba(0,0,0,0.15);
-      }
-
-      .well {
-        background-color: #fff8f8 !important;
-        border: 1px solid #d8b6bc !important;
-        border-radius: 14px !important;
-        box-shadow: 0 3px 10px rgba(0,0,0,0.08);
-        padding: 18px;
-      }
-
-      .nav-tabs > li > a {
-        color: #6b1f2a !important;
-        font-weight: 600;
-        font-size: 16px;
-      }
-
-      .nav-tabs > li.active > a,
-      .nav-tabs > li.active > a:hover,
-      .nav-tabs > li.active > a:focus {
-        background-color: #8b1e2d !important;
-        color: white !important;
-        border: 1px solid #8b1e2d !important;
-        border-radius: 8px 8px 0 0;
-      }
-
-      .control-label {
-        font-size: 16px;
-        font-weight: 700;
-        color: #5c0f1b;
-      }
-
-      .form-control {
-        font-size: 15px;
-        border-radius: 10px;
-        border: 1px solid #c69aa3;
-      }
-
-      h4 {
-        color: #7a1022;
-        font-weight: 700;
-        margin-top: 5px;
-      }
-
-      .section-note {
+        margin-bottom: 1rem;
+    }
+    .note-box {
         background-color: #fdf1f3;
         border-left: 5px solid #8b1e2d;
-        padding: 10px 14px;
+        padding: 0.75rem 1rem;
         border-radius: 8px;
-        margin-bottom: 16px;
-        font-size: 15px;
-      }
+        margin-bottom: 1rem;
+        color: #3b1f24;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-      .shiny-options-group label {
-        font-size: 15px;
-        color: #4a1f28;
-      }
-    "))
-  ),
-  
-  div(
-    class = "title-panel",
-    h1("Wine Production Dashboard", style = "margin-top: 0; font-weight: 700;"),
-    p(
-      "Explore yearly production mix and compare wine categories across time.",
-      style = "font-size: 17px; margin-bottom: 0;"
+# ---------------------------------
+# Helper function to clean numeric columns
+# ---------------------------------
+def clean_numeric_series(series):
+    series = series.astype(str).str.strip()
+    series = series.replace(["", "N/A", "NA", "null", "NULL"], np.nan)
+    series = series.str.replace(",", "", regex=False)
+    return pd.to_numeric(series, errors="coerce")
+
+# ---------------------------------
+# Create unknown column F
+# ---------------------------------
+def create_unknown_column(df):
+    df = df.copy()
+
+    cols_to_clean = ["A", "B", "C", "D", "E", "Production"]
+    for col in cols_to_clean:
+        df[col] = clean_numeric_series(df[col])
+
+    df["missing_count"] = df[["A", "B", "C", "D", "E"]].isna().sum(axis=1)
+    df["known_total"] = df[["A", "B", "C", "D", "E"]].sum(axis=1, skipna=True)
+
+    df["F"] = np.where(
+        df["missing_count"] == 0,
+        0,
+        df["Production"] - df["known_total"]
     )
-  ),
-  
-  sidebarLayout(
-    sidebarPanel(
-      width = 3,
-      
-      h4("Production Proportions"),
-      div(
-        class = "section-note",
-        "Select a production year to view category shares and total annual volume."
-      ),
-      selectInput(
-        "year_select",
-        "Select Year",
-        choices = sort(unique(app_df$Year)),
-        selected = max(app_df$Year, na.rm = TRUE)
-      ),
-      
-      br(),
-      
-      h4("Compare Two Wine Types"),
-      div(
-        class = "section-note",
-        "Choose two categories, then choose how you want to compare them."
-      ),
-      selectInput(
-        "type1",
-        "First Wine Type",
-        choices = production_cols,
-        selected = "Still Wine ≤ 16% ABV"
-      ),
-      selectInput(
-        "type2",
-        "Second Wine Type",
-        choices = production_cols,
-        selected = "Sparkling Wine"
-      ),
-      
-      radioButtons(
-        "view_mode",
-        "Comparison View",
-        choices = c(
-          "Within a Single Year" = "within_year",
-          "By Month Across Years" = "month_across_years",
-          "Annual Total by Year" = "year_over_year"
-        ),
-        selected = "within_year"
-      ),
-      
-      conditionalPanel(
-        condition = "input.view_mode == 'within_year'",
-        selectInput(
-          "year_focus",
-          "Select Year for Line Graph",
-          choices = sort(unique(app_df$Year)),
-          selected = max(app_df$Year, na.rm = TRUE)
-        )
-      ),
-      
-      conditionalPanel(
-        condition = "input.view_mode == 'month_across_years'",
-        selectInput(
-          "month_focus",
-          "Select Month",
-          choices = levels(app_df$Month),
-          selected = "January"
-        )
-      ),
-      
-      br(),
-      div(
-        class = "section-note",
-        strong("Selected Comparison:"),
-        br(),
-        textOutput("selectedTypesText")
-      )
-    ),
-    
-    mainPanel(
-      width = 9,
-      tabsetPanel(
-        tabPanel(
-          "Production Proportions",
-          br(),
-          plotOutput("pieChart", height = "620px")
-        ),
-        tabPanel(
-          "Production Over Time",
-          br(),
-          plotOutput("lineChart", height = "620px")
-        )
-      )
+
+    df["F"] = df["F"].fillna(0)
+    df["F"] = np.where(df["F"] < 0, 0, df["F"])
+
+    df = df.drop(columns=["missing_count", "known_total"])
+    return df
+
+# ---------------------------------
+# Load data
+# ---------------------------------
+@st.cache_data
+def load_data():
+    df = pd.read_csv("national_actual_1.csv")
+
+    required_cols = [
+        "Month", "Year", "Date", "Industry_members",
+        "Production", "A", "B", "C", "D", "E"
+    ]
+
+    missing = [col for col in required_cols if col not in df.columns]
+    if missing:
+        raise ValueError(f"Missing required columns in CSV: {missing}")
+
+    pilot_df = df[required_cols].copy()
+    pilot_df = create_unknown_column(pilot_df)
+
+    app_df = pilot_df.rename(columns={
+        "A": "Still Wine ≤ 16% ABV",
+        "B": "Still Wine > 16% ABV",
+        "C": "Sparkling Wine",
+        "D": "Artificially Carbonated Wine",
+        "E": "Hard Cider",
+        "F": "Unknown"
+    })
+
+    month_levels = [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December"
+    ]
+
+    app_df["Month"] = pd.Categorical(
+        app_df["Month"],
+        categories=month_levels,
+        ordered=True
     )
-  )
+
+    app_df["Year"] = pd.to_numeric(app_df["Year"], errors="coerce")
+
+    production_cols = [
+        "Still Wine ≤ 16% ABV",
+        "Still Wine > 16% ABV",
+        "Sparkling Wine",
+        "Artificially Carbonated Wine",
+        "Hard Cider",
+        "Unknown"
+    ]
+
+    return app_df, production_cols, month_levels
+
+app_df, production_cols, month_levels = load_data()
+
+# ---------------------------------
+# Header
+# ---------------------------------
+st.markdown("""
+<div class="title-box">
+    <h1 style="margin:0;">Wine Production Dashboard</h1>
+    <p style="margin:8px 0 0 0; font-size:17px;">
+        Explore yearly production mix and compare wine categories across time.
+    </p>
+</div>
+""", unsafe_allow_html=True)
+
+# ---------------------------------
+# Sidebar
+# ---------------------------------
+st.sidebar.header("Dashboard Controls")
+
+st.sidebar.subheader("Production Proportions")
+st.sidebar.markdown("""
+<div class="note-box">
+Select a production year to view category shares and total annual volume.
+</div>
+""", unsafe_allow_html=True)
+
+year_options = sorted(app_df["Year"].dropna().unique().astype(int).tolist())
+default_year = max(year_options)
+
+year_select = st.sidebar.selectbox(
+    "Select Year",
+    options=year_options,
+    index=year_options.index(default_year)
 )
 
-# ---------------------------------
-# SERVER
-# ---------------------------------
-server <- function(input, output) {
-  
-  output$selectedTypesText <- renderText({
-    paste(input$type1, "vs.", input$type2)
-  })
-  
-  # -------------------------------
-  # PIE CHART DATA
-  # -------------------------------
-  pie_data <- reactive({
-    app_df %>%
-      filter(Year == input$year_select) %>%
-      summarise(across(all_of(production_cols), ~ sum(.x, na.rm = TRUE))) %>%
-      pivot_longer(
-        everything(),
-        names_to = "Type",
-        values_to = "Production"
-      ) %>%
-      mutate(
-        pct = Production / sum(Production),
-        pct_label = percent(pct, accuracy = 0.1),
-        prod_label = label_number(big.mark = ",")(Production),
-        label_text = paste0(Type, "\n", pct_label, "\n(", prod_label, ")")
-      )
-  })
-  
-  output$pieChart <- renderPlot({
-    
-    pie_colors <- c(
-      "Still Wine ≤ 16% ABV" = "#5c0f1b",
-      "Still Wine > 16% ABV" = "#8b1e2d",
-      "Sparkling Wine" = "#b23a48",
-      "Artificially Carbonated Wine" = "#c95c6d",
-      "Hard Cider" = "#df8f9a",
-      "Unknown" = "#e8c7cc"
-    )
-    
-    total_prod <- sum(pie_data()$Production, na.rm = TRUE)
-    
-    ggplot(pie_data(), aes(x = 2, y = Production, fill = Type)) +
-      geom_col(color = "white", linewidth = 1) +
-      coord_polar(theta = "y") +
-      xlim(0.5, 2.6) +
-      geom_text(
-        aes(label = ifelse(pct >= 0.04, label_text, "")),
-        position = position_stack(vjust = 0.5),
-        size = 5.5,
-        lineheight = 0.95,
-        color = "white"
-      ) +
-      scale_fill_manual(values = pie_colors) +
-      labs(
-        title = paste("Production Share -", input$year_select),
-        subtitle = paste("Total Annual Production:", comma(total_prod)),
-        fill = "Wine Type"
-      ) +
-      theme_void(base_size = 15) +
-      theme(
-        plot.title = element_text(size = 22, face = "bold", color = "#5c0f1b"),
-        plot.subtitle = element_text(size = 15, color = "#6b1f2a"),
-        legend.title = element_text(size = 15, face = "bold"),
-        legend.text = element_text(size = 13),
-        legend.position = "right"
-      )
-  })
-  
-  # -------------------------------
-  # LINE GRAPH DATA
-  # -------------------------------
-  line_data <- reactive({
-    
-    selected <- unique(c(input$type1, input$type2))
-    
-    if (input$view_mode == "within_year") {
-      
-      app_df %>%
-        filter(Year == input$year_focus) %>%
-        select(Year, Month, all_of(selected)) %>%
-        pivot_longer(
-          cols = all_of(selected),
-          names_to = "Type",
-          values_to = "Production"
-        ) %>%
-        group_by(Year, Month, Type) %>%
-        summarise(
-          Production = sum(Production, na.rm = TRUE),
-          .groups = "drop"
-        )
-      
-    } else if (input$view_mode == "month_across_years") {
-      
-      app_df %>%
-        filter(Month == input$month_focus) %>%
-        select(Year, Month, all_of(selected)) %>%
-        pivot_longer(
-          cols = all_of(selected),
-          names_to = "Type",
-          values_to = "Production"
-        ) %>%
-        group_by(Year, Month, Type) %>%
-        summarise(
-          Production = sum(Production, na.rm = TRUE),
-          .groups = "drop"
-        )
-      
-    } else {
-      
-      app_df %>%
-        select(Year, all_of(selected)) %>%
-        pivot_longer(
-          cols = all_of(selected),
-          names_to = "Type",
-          values_to = "Production"
-        ) %>%
-        group_by(Year, Type) %>%
-        summarise(
-          Production = sum(Production, na.rm = TRUE),
-          .groups = "drop"
-        )
-    }
-  })
-  
-  output$lineChart <- renderPlot({
-    
-    line_colors <- c("#7f1127", "#d35d6e")
-names(line_colors) <- c(input$type1, input$type2)
+st.sidebar.markdown("---")
+st.sidebar.subheader("Compare Two Wine Types")
+st.sidebar.markdown("""
+<div class="note-box">
+Choose two categories, then choose how you want to compare them.
+</div>
+""", unsafe_allow_html=True)
 
-scale_color_manual(values = line_colors)
-    names(line_colors) <- c(input$type1, input$type2)
-    
-    base_plot <- ggplot(
-      line_data(),
-      aes(
-        y = Production,
-        color = Type,
-        group = Type
-      )
-    ) +
-      geom_line(linewidth = 1.5) +
-      geom_point(size = 3) +
-      scale_color_manual(values = line_colors) +
-      scale_y_continuous(
-        labels = label_number(scale = 1e-6, suffix = "M"),
-        expand = expansion(mult = c(0.05, 0.1))
-      ) +
-      labs(
-        color = "Selected Wine Types",
-        y = "Production (Millions)"
-      ) +
-      guides(
-        color = guide_legend(
-          override.aes = list(linewidth = 2.5, size = 4)
+type1 = st.sidebar.selectbox(
+    "First Wine Type",
+    options=production_cols,
+    index=production_cols.index("Still Wine ≤ 16% ABV")
+)
+
+type2_default = "Sparkling Wine" if "Sparkling Wine" in production_cols else production_cols[1]
+type2 = st.sidebar.selectbox(
+    "Second Wine Type",
+    options=production_cols,
+    index=production_cols.index(type2_default)
+)
+
+view_mode_labels = {
+    "within_year": "Within a Single Year",
+    "month_across_years": "By Month Across Years",
+    "year_over_year": "Annual Total by Year"
+}
+
+view_mode = st.sidebar.radio(
+    "Comparison View",
+    options=list(view_mode_labels.keys()),
+    format_func=lambda x: view_mode_labels[x],
+    index=0
+)
+
+year_focus = None
+month_focus = None
+
+if view_mode == "within_year":
+    year_focus = st.sidebar.selectbox(
+        "Select Year for Line Graph",
+        options=year_options,
+        index=year_options.index(default_year),
+        key="year_focus"
+    )
+
+elif view_mode == "month_across_years":
+    month_focus = st.sidebar.selectbox(
+        "Select Month",
+        options=month_levels,
+        index=0
+    )
+
+st.sidebar.markdown("---")
+st.sidebar.markdown(f"**Selected Comparison:**  \n{type1} vs. {type2}")
+
+# ---------------------------------
+# Pie chart data
+# ---------------------------------
+def get_pie_data(df, year_value, prod_cols):
+    pie_df = (
+        df[df["Year"] == year_value][prod_cols]
+        .sum(numeric_only=True)
+        .reset_index()
+    )
+    pie_df.columns = ["Type", "Production"]
+    total = pie_df["Production"].sum()
+
+    pie_df["pct"] = np.where(total > 0, pie_df["Production"] / total, 0)
+    pie_df["pct_label"] = pie_df["pct"].map(lambda x: f"{x:.1%}")
+    pie_df["prod_label"] = pie_df["Production"].map(lambda x: f"{int(round(x)):,}")
+    pie_df["label_text"] = (
+        pie_df["Type"] + "<br>" +
+        pie_df["pct_label"] + "<br>(" +
+        pie_df["prod_label"] + ")"
+    )
+    return pie_df, total
+
+# ---------------------------------
+# Line chart data
+# ---------------------------------
+def get_line_data(df, selected_types, mode, year_focus=None, month_focus=None):
+    if mode == "within_year":
+        temp = df[df["Year"] == year_focus][["Year", "Month"] + selected_types].copy()
+        long_df = temp.melt(
+            id_vars=["Year", "Month"],
+            value_vars=selected_types,
+            var_name="Type",
+            value_name="Production"
         )
-      ) +
-      theme_minimal(base_size = 15) +
-      theme(
-        plot.title = element_text(size = 22, face = "bold", color = "#5c0f1b"),
-        plot.subtitle = element_text(size = 15, color = "#6b1f2a"),
-        axis.title = element_text(size = 15, face = "bold"),
-        axis.text = element_text(size = 12, color = "#3b1f24"),
-        axis.text.x = element_text(angle = 45, hjust = 1),
-        legend.title = element_text(size = 15, face = "bold"),
-        legend.text = element_text(size = 13),
-        legend.background = element_rect(fill = "#fff5f6", color = "#cfa5ad"),
-        legend.box.background = element_rect(fill = "#fff5f6", color = "#cfa5ad"),
-        legend.position = "bottom",
-        panel.grid.minor = element_blank(),
-        panel.grid.major.x = element_blank()
-      )
-    
-    if (input$view_mode == "within_year") {
-      
-      base_plot +
-        aes(x = Month) +
-        labs(
-          title = paste("Monthly Production in", input$year_focus),
-          subtitle = paste("Comparing", input$type1, "and", input$type2, "within one year"),
-          x = "Month"
+        result = (
+            long_df.groupby(["Year", "Month", "Type"], observed=False)["Production"]
+            .sum()
+            .reset_index()
         )
-      
-    } else if (input$view_mode == "month_across_years") {
-      
-      base_plot +
-        aes(x = Year) +
-        labs(
-          title = paste(input$month_focus, "Production Across Years"),
-          subtitle = paste("Comparing", input$type1, "and", input$type2, "for", input$month_focus, "over time"),
-          x = "Year"
-        ) +
-        scale_x_continuous(breaks = sort(unique(app_df$Year)))
-      
-    } else {
-      
-      base_plot +
-        aes(x = Year) +
-        labs(
-          title = "Annual Total Production by Year",
-          subtitle = paste("Comparing annual totals for", input$type1, "and", input$type2),
-          x = "Year"
-        ) +
-        scale_x_continuous(breaks = sort(unique(app_df$Year)))
-    }
-  })
+        return result.sort_values(["Month", "Type"])
+
+    elif mode == "month_across_years":
+        temp = df[df["Month"] == month_focus][["Year", "Month"] + selected_types].copy()
+        long_df = temp.melt(
+            id_vars=["Year", "Month"],
+            value_vars=selected_types,
+            var_name="Type",
+            value_name="Production"
+        )
+        result = (
+            long_df.groupby(["Year", "Month", "Type"], observed=False)["Production"]
+            .sum()
+            .reset_index()
+        )
+        return result.sort_values(["Year", "Type"])
+
+    else:
+        temp = df[["Year"] + selected_types].copy()
+        long_df = temp.melt(
+            id_vars=["Year"],
+            value_vars=selected_types,
+            var_name="Type",
+            value_name="Production"
+        )
+        result = (
+            long_df.groupby(["Year", "Type"])["Production"]
+            .sum()
+            .reset_index()
+        )
+        return result.sort_values(["Year", "Type"])
+
+# ---------------------------------
+# Colors
+# ---------------------------------
+pie_colors = {
+    "Still Wine ≤ 16% ABV": "#5c0f1b",
+    "Still Wine > 16% ABV": "#8b1e2d",
+    "Sparkling Wine": "#b23a48",
+    "Artificially Carbonated Wine": "#c95c6d",
+    "Hard Cider": "#df8f9a",
+    "Unknown": "#e8c7cc"
+}
+
+line_colors = {
+    type1: "#7f1127",
+    type2: "#d35d6e"
 }
 
 # ---------------------------------
-# RUN APP
+# Tabs
 # ---------------------------------
-shinyApp(ui = ui, server = server)
-```
+tab1, tab2 = st.tabs(["Production Proportions", "Production Over Time"])
 
+with tab1:
+    pie_data, total_prod = get_pie_data(app_df, year_select, production_cols)
 
+    st.subheader(f"Production Share - {year_select}")
+    st.caption(f"Total Annual Production: {int(round(total_prod)):,}")
 
+    fig_pie = go.Figure(
+        data=[
+            go.Pie(
+                labels=pie_data["Type"],
+                values=pie_data["Production"],
+                hole=0.15,
+                marker=dict(
+                    colors=[pie_colors.get(t, "#cccccc") for t in pie_data["Type"]],
+                    line=dict(color="white", width=2)
+                ),
+                text=[
+                    txt if pct >= 0.04 else ""
+                    for txt, pct in zip(pie_data["label_text"], pie_data["pct"])
+                ],
+                textinfo="text",
+                textfont=dict(color="white", size=16),
+                hovertemplate="<b>%{label}</b><br>Production: %{value:,.0f}<br>Share: %{percent}<extra></extra>"
+            )
+        ]
+    )
+
+    fig_pie.update_layout(
+        height=650,
+        showlegend=True,
+        legend_title_text="Wine Type",
+        margin=dict(t=40, b=40, l=20, r=20)
+    )
+
+    st.plotly_chart(fig_pie, use_container_width=True)
+
+with tab2:
+    selected = list(dict.fromkeys([type1, type2]))
+    line_data = get_line_data(app_df, selected, view_mode, year_focus, month_focus)
+
+    if view_mode == "within_year":
+        title = f"Monthly Production in {year_focus}"
+        subtitle = f"Comparing {type1} and {type2} within one year"
+        x_col = "Month"
+        x_order = month_levels
+
+    elif view_mode == "month_across_years":
+        title = f"{month_focus} Production Across Years"
+        subtitle = f"Comparing {type1} and {type2} for {month_focus} over time"
+        x_col = "Year"
+        x_order = sorted(app_df["Year"].dropna().unique().tolist())
+
+    else:
+        title = "Annual Total Production by Year"
+        subtitle = f"Comparing annual totals for {type1} and {type2}"
+        x_col = "Year"
+        x_order = sorted(app_df["Year"].dropna().unique().tolist())
+
+    st.subheader(title)
+    st.caption(subtitle)
+
+    fig_line = px.line(
+        line_data,
+        x=x_col,
+        y="Production",
+        color="Type",
+        markers=True,
+        category_orders={"Month": month_levels},
+        color_discrete_map=line_colors
+    )
+
+    fig_line.update_traces(line=dict(width=4), marker=dict(size=9))
+
+    fig_line.update_layout(
+        height=650,
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        legend_title_text="Selected Wine Types",
+        xaxis_title=x_col,
+        yaxis_title="Production (Millions)",
+        font=dict(color="#3b1f24"),
+        margin=dict(t=50, b=40, l=20, r=20)
+    )
+
+    fig_line.update_yaxes(
+        tickformat=",.0f",
+        gridcolor="rgba(0,0,0,0.08)"
+    )
+
+    if x_col == "Month":
+        fig_line.update_xaxes(categoryorder="array", categoryarray=x_order)
+    else:
+        fig_line.update_xaxes(tickmode="array", tickvals=x_order)
+
+    st.plotly_chart(fig_line, use_container_width=True)
+
+# ---------------------------------
+# Optional data preview
+# ---------------------------------
+with st.expander("Preview cleaned data"):
+    st.dataframe(app_df, use_container_width=True)
