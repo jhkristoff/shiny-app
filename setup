@@ -1,0 +1,69 @@
+import pandas as pd
+import numpy as np
+
+# -----------------------------
+# Load CSV file
+# -----------------------------
+df = pd.read_csv("national_actual_1.csv")
+
+# -----------------------------
+# Function to create unknown column F
+# -----------------------------
+def create_unknown_column(df):
+    df = df.copy()
+
+    cols_to_clean = ["A", "B", "C", "D", "E", "Production"]
+
+    for col in cols_to_clean:
+        df[col] = (
+            df[col]
+            .astype(str)
+            .str.strip()
+            .replace(["", "N/A", "NA", "null", "NULL"], np.nan)
+            .str.replace(",", "", regex=False)
+        )
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # Count missing values in A:E
+    df["missing_count"] = df[["A", "B", "C", "D", "E"]].isna().sum(axis=1)
+
+    # Sum known values in A:E
+    df["known_total"] = df[["A", "B", "C", "D", "E"]].sum(axis=1, skipna=True)
+
+    # If all five values present, F = 0
+    # Otherwise F = Production - known_total
+    df["F"] = np.where(
+        df["missing_count"] == 0,
+        0,
+        df["Production"] - df["known_total"]
+    )
+
+    # Prevent negative / missing values
+    df["F"] = df["F"].fillna(0)
+    df["F"] = np.where(df["F"] < 0, 0, df["F"])
+
+    # Remove helper columns
+    df.drop(columns=["missing_count", "known_total"], inplace=True)
+
+    return df
+
+
+# -----------------------------
+# Create pilot_df
+# -----------------------------
+pilot_df = df[
+    ["Month", "Year", "Date", "Industry_members", "Production", "A", "B", "C", "D", "E"]
+].copy()
+
+# -----------------------------
+# Apply function
+# -----------------------------
+pilot_df = create_unknown_column(pilot_df)
+
+# -----------------------------
+# Save output if needed
+# -----------------------------
+pilot_df.to_csv("pilot_df_output.csv", index=False)
+
+# View result
+print(pilot_df.head())
